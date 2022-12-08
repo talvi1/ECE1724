@@ -7,14 +7,13 @@ import matplotlib.pyplot as plt
 
 class BikeShareEnv(gym.Env):
     metadata = {'render.modes': ['human']}
-    #ride_data: ride share trip data passed as a pandas dataframe
     #time_step: timestep in minutes 
     #zone_size: edge size of square grid zone in metres to be used for balancing supply (recommend: 500 m)
     def __init__(self, ride_data, time_step, zone_size): 
         assert ride_data.ndim == 2
 
         self.seed()
-        self.ride_data = ride_data
+        self.ride_data = pd.read_csv('./2022-09.csv')
         self.time_step = time_step #step simulation time in minutes 
         self.zones, self.num_zones = self.process_data(zone_size)
         self.shape = self.data_features.shape
@@ -64,19 +63,19 @@ class BikeShareEnv(gym.Env):
         if self.curr_step == self.max_length:
             self.done = True
         
-        demand, arrivals = self.calculate_demand_arrivals(action)
-        fulfilled_demand = self.find_fulfilled_demand(demand)
+        demand, arrivals = self.calculate_demand_arrivals()
+        fulfilled_demand = self.find_fulfilled_demand(demand, action)
         fulfilled_arrivals = self.find_fulfilled_arrivals(arrivals)
         updated_supply = self.prev_supply - fulfilled_demand + fulfilled_arrivals
 
         step_award = self.calculate_reward(action)
 
 
-    def calculate_demand_arrivals(action):
+    def calculate_demand_arrivals():
         # calculate number of trips (demands, arrivals) requested per zone as a numpy vector for each timestep
         # for each time step get the index of the trips 
         # for each station start point and endpoint, get zone, and add demand/arrivals to the zone
-
+        
 
     def station_zone(station):
         # return zone for each station
