@@ -49,8 +49,6 @@ def zone_division(distance):
     for station, zone in zip(zones_w_station['station'], zones_w_station['index_left']):
         station_zones[station] = int(zone)
         zone_list.append(int(zone))
-    print(len(zone_list))
-    print(len(set(zone_list)))
     zone_list = sorted(list(set(zone_list)))
     zone_dict = {}
     for x in range(len(zone_list)):
@@ -66,8 +64,8 @@ def process_bike_share():
     df['Start Time'] = pd.to_datetime(df['Start Time'], format='%m/%d/%Y %H:%M')
     df['End Time'] = pd.to_datetime(df['End Time'], format='%m/%d/%Y %H:%M')
     #print(df.loc[pd.to_datetime(df['Start Time'] == '2022.09.01')])
-    mask = (df['Start Time'] >= '2022-09-01 00:00:00') & (df['Start Time'] <= '2022-09-01 00:30:00')
-    station_zones, zone_dict = zone_division(500)
+    mask = (df['Start Time'] >= '2022-09-01 08:00:00') & (df['Start Time'] <= '2022-09-01 08:59:00')
+    station_zones, zone_dict, y = zone_division(300)
     demand_vec = np.zeros(len(zone_dict))
     arrival_vec = np.zeros(len(zone_dict))
     for start_st, end_st in zip(df['Start Station Id'].loc[mask], df['End Station Id'].loc[mask]):
@@ -88,7 +86,7 @@ def max_zone_capacity():
 
     for x in range(len(stations['data']['stations'])):
         station[int(stations['data']['stations'][x]['station_id'])] = [stations['data']['stations'][x]['capacity']]
-    station_zones, zone_dict = zone_division(500)
+    station_zones, zone_dict, y = zone_division(300)
 
     max_capacity = np.zeros(len(zone_dict))
 
@@ -106,7 +104,7 @@ def initialize_random_supply():
     return rand_supply
 
 def find_zone_distance():
-    station_zones, zone_dict, zone_df = zone_division(500)
+    station_zones, zone_dict, zone_df = zone_division(300)
     a = zone_df.iloc[63]['geometry'].centroid
     b = zone_df.iloc[1193]['geometry'].centroid
     print(a.distance(b))
@@ -123,9 +121,54 @@ def find_zone_distance():
         temp_dist = {}
     return zone_dist
 
- 
+def fulfilled_demand():
+    max_capacity = max_zone_capacity()
+    supply = initialize_random_supply()
+    demand, arrival = process_bike_share()
+    station_zones, zone_dict, zones = zone_division(300)
+    action_price = np.zeros(len(max_capacity))
+    for x in range(len(max_capacity)):
+        action_price[x] = round(random.uniform(0.0, 4.0), 2)
+    extra_demand = np.subtract(supply, demand)
+    lost_demand = np.zeros(len(max_capacity))
+    zone_dict_rev = {y: x for x, y in zone_dict.items()}
+    zone_dist = find_zone_distance()
+    print(extra_demand)
+    for x in range(len(extra_demand)):
+        if extra_demand[x] < 0:
+            zon = zone_dict_rev[x]
+            nearest_zones = zone_dist[zon]
+            if len(nearest_zones) == 0: #no nearby zones 
+                lost_demand[x] = abs(extra_demand[x])
+            else: 
+                filled = False
+                visited = []
+                while not filled: 
+                    nearest = min(nearest_zones, key=nearest_zones.get)
+                    if extra_demand[zone_dict[nearest]] <= 0:
+                        nearest_zones.pop(nearest)
+                        if len(nearest_zones) == 0:
+                            lost_demand[x] = abs(extra_demand[x])
+                            break
+                    elif extra_demand[zone_dict[nearest]] >= abs(extra_demand[x]):
+                        filled = True 
+                        visited.append([nearest_zones[nearest], abs(extra_demand[x])])
+                    else: 
+                        a = extra_demand[zone_dict[nearest]]
+                        extra_demand[x] += a
+                        visited.append([nearest_zones[nearest], a])
+                        nearest_zones.pop(nearest)
+                if filled:
+                    for y in range(len(visited)):
+                        if user_reject(visited[y][0], action_price[x]):
+                            lost_demand[x] += visited[y][1] 
+    print(lost_demand.sum())
+    print(np.subtract(demand, lost_demand).sum())
 
+    
 
-
-
-find_zone_distance()
+def user_reject(distance, price):
+    max_distance = 2000
+    return ((distance/max_distance)**2)*12 > price
+    
+fulfilled_demand()
