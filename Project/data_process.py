@@ -68,13 +68,21 @@ def process_bike_share():
     station_zones, zone_dict, y = zone_division(300)
     demand_vec = np.zeros(len(zone_dict))
     arrival_vec = np.zeros(len(zone_dict))
+    start_end = {}
     for start_st, end_st in zip(df['Start Station Id'].loc[mask], df['End Station Id'].loc[mask]):
-        if start_st in station_zones:
+        if start_st in station_zones and end_st in station_zones:
             start_zone = station_zones[start_st]
-        if end_st in station_zones:
+            demand_vec[zone_dict[start_zone]] +=1
             end_zone = station_zones[end_st]
-        demand_vec[zone_dict[start_zone]] +=1
-        arrival_vec[zone_dict[end_zone]] +=1
+            arrival_vec[zone_dict[end_zone]] +=1
+            if start_zone in start_end:
+                if end_zone not in start_end[start_zone]:
+                    start_end[start_zone].update({end_zone: 1})
+                else:
+                    start_end[start_zone][end_zone] += 1
+            else:
+                start_end[start_zone] = {end_zone: 1} 
+    print(start_end)
        
     return demand_vec, arrival_vec
 
@@ -165,10 +173,15 @@ def fulfilled_demand():
     print(lost_demand.sum())
     print(np.subtract(demand, lost_demand).sum())
 
-    
+def find_fulfilled_arrivals(self, demand, arrivals, lost_demand):
+        #find fulfilled arrivals based on overall arrivals, minus the lost demand
+    for x in range(self.num_zones):
+        
+
+    return np.zeros(self.num_zones
 
 def user_reject(distance, price):
     max_distance = 2000
     return ((distance/max_distance)**2)*12 > price
     
-fulfilled_demand()
+process_bike_share()

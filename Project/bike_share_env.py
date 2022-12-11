@@ -7,16 +7,19 @@ import requests
 import geopandas as gpd
 import random
 import math
+from itertools import product
 from shapely.geometry import Point, Polygon
 import pandas as pd
+from stable_baselines3.common.env_checker import check_env
+from stable_baselines3 import A2C
 
 class BikeShareEnv(gym.Env):
     #time_step: timestep in minutes 
     #zone_size: edge size of square grid zone in metres to be used for balancing supply (recommend: 500 m)
-    def __init__(self, df, size): 
+    def __init__(self, data, size): 
         super(BikeShareEnv, self).__init__()
-        self.time_step = 60 #step simulation time in minutes 
-        self.ride_data = df #dataframe containing bike share trip data for a month
+        self.time_step = 1 #step simulation time in hours 
+        self.ride_data = data #dataframe containing bike share trip data for a month
         self.zone_size = size
         self.max_distance = 1500
         self.station_zones, self.zone_dict, self.zones = self.zone_division()
@@ -26,14 +29,14 @@ class BikeShareEnv(gym.Env):
         
 
         #spaces
-        self.action_space = spaces.Box(low=np.zeros(num_zones), high=self.max_capacity), dtype=np.float32)
+        self.action_space = spaces.Box(low=np.zeros(self.num_zones), high=self.max_capacity, dtype=np.float32)
         self.observation_space = spaces.Dict(
-                            {'demand': spaces.Box(low=np.zeros(num_zones), high=self.max_capacity), 
-                              'arrival': spaces.Box(low=np.zeros(num_zones), high=self.max_capacity), 
-                              'supply': spaces.Box(low=np.zeros(num_zones), high=self.max_capacity)
+                            {'demand': spaces.Box(low=np.zeros(self.num_zones), high=self.max_capacity, shape=(self.num_zones,), dtype=np.float64), 
+                              'arrival': spaces.Box(low=np.zeros(self.num_zones), high=self.max_capacity, shape=(self.num_zones,), dtype=np.float64), 
+                              'supply': spaces.Box(low=np.zeros(self.num_zones), high=self.max_capacity, shape=(self.num_zones,), dtype=np.float64)
                             })
         #episode 
-        self.max_length = 24*60 #minutes in one day
+        self.max_length = 23 #minutes in one day
         self.curr_step = None
         self.done = None
         self.prev_supply = None
@@ -47,16 +50,19 @@ class BikeShareEnv(gym.Env):
         self.done = False
         self.curr_step = 0
         self.reward_history = []
-        self.history = {}
+        self.history = []
         random_supply = self.initialize_random_supply() #randomly sample supply from the overall supply capacity
-        obs =  {'demand': np.zeros(self.num_zones), 
+        obs =  {
+                'demand': np.zeros(self.num_zones), 
                 'arrival': np.zeros(self.num_zones), 
-                'supply': random_supply}
-
+                'supply': random_supply
+                }
+        print(type(obs))
         self.prev_supply = random_supply
 
-        self.start_day = self.np_random.integers(0, 30, dtype=np.int64)
+        self.start_day = random.randrange(1, 30)
         #to-do: initialize a random list based on capacity for each zone 
+        info = {}
         return obs
 
     def step(self, action):
@@ -67,34 +73,49 @@ class BikeShareEnv(gym.Env):
         
         demand, arrivals = self.process_bike_share()
         fulfilled_demand = self.find_fulfilled_demand(demand, action)
-        fulfilled_arrivals = self.find_fulfilled_arrivals(arrivals)
+        fulfilled_arrivals = self.find_fulfilled_arrivals(arrivals, np.subtract(demand, fulfilled_demand))
         temp = np.subtract(self.prev_supply, fulfilled_demand) #Prev supply updated with fulfilled demand removed
         updated_supply = np.add(temp, fulfilled_arrivals)
+        
+        lost_demand = np.subtract(demand, fulfilled_demand).sum()
+        add_demand = np.subtract(self.prev_supply, demand)
+        total_dem = 0
+        for x in range(len(add_demand)):
+            if add_demand[x] < 0:
+                total_dem += abs(add_demand[x])
+        if total_dem == 0:
+            step_reward = 0
+        else:
+            step_reward = (lost_demand)/total_dem
         self.prev_supply = updated_supply
 
-        step_award = fulfilled_demand.sum()/demand.sum()
-        self.current_step += self.time_step
+        
+        self.curr_step += self.time_step
         obs = {
                 'demand': fulfilled_demand,
-                'arrival': fulfilled_arrival,
+                'arrival': fulfilled_arrivals,
                 'supply': self.prev_supply
                 }
+        info = {}
+        self.history.append(step_reward)
         return obs, step_reward, self.done, info
 
     def render(self, mode="console"):
         if mode != 'console':
             raise NotImplementedError()
         # agent is represented as a cross, rest as a dot
-        print("." * self.agent_pos, end="")
-        print("x", end="")
-        print("." * (self.grid_size - self.agent_pos))
+        
 
     def close(self):
+        pass
+    
+    def return_history(self):
+        return self.history
     
     def find_fulfilled_demand(self, demand, action):
         #find fulfilled demand based on overall demand and user cost model 
         supply = self.prev_supply
-        extra_demand = np.subtract(prev_supply, demand)
+        extra_demand = np.subtract(self.prev_supply, demand)
         lost_demand = np.zeros(self.num_zones)
         zone_dict_rev = {y: x for x, y in self.zone_dict.items()}
         
@@ -107,32 +128,30 @@ class BikeShareEnv(gym.Env):
                 else: 
                     filled = False
                     visited = []
-                    while not filled: 
+                    extra = abs(extra_demand[x])
+                    while extra > 0 and len(nearest_zones) > 0: 
                         nearest = min(nearest_zones, key=nearest_zones.get)
-                        if extra_demand[zone_dict[nearest]] <= 0:
-                            nearest_zones.pop(nearest)
-                            if len(nearest_zones) == 0:
-                                lost_demand[x] = abs(extra_demand[x])
-                                break
-                        elif extra_demand[zone_dict[nearest]] >= abs(extra_demand[x]):
-                            filled = True 
-                            visited.append([nearest_zones[nearest], abs(extra_demand[x])])
-                        else: 
-                            a = extra_demand[zone_dict[nearest]]
-                            extra_demand[x] += a
-                            visited.append([nearest_zones[nearest], a])
-                            nearest_zones.pop(nearest)
-                    if filled:
-                        for y in range(len(visited)):
-                            user_reject = ((visited[y][0]/self.max_distance)**2)*12 > action_price[x] 
-                            #bool value to check if user cost for the walking distance to the nearest zone is greater than the offered price
-                            # if so, user rejects the offered price, since it offers negative utility. If user rejects, demand is lost.  
-                            if user_reject:
-                                lost_demand[x] += visited[y][1] 
+                        avail = extra_demand[self.zone_dict[nearest]]
+                        if avail >= extra:
+                            used = avail - extra
+                            extra = 0
+                        else:
+                            used = avail 
+                            extra = extra - avail
+                        visited.append([nearest_zones[nearest], used])
+                        nearest_zones.pop(nearest)
+                        
+                    for y in range(len(visited)):
+                        user_reject = ((visited[y][0]/self.max_distance)**2)*12 > action[x] 
+                        #bool value to check if user cost for the walking distance to the nearest zone is greater than the offered price
+                        # if so, user rejects the offered price, since it offers negative utility. If user rejects, demand is lost.  
+                        if user_reject:
+                            lost_demand[x] += visited[y][1] 
         return np.subtract(demand, lost_demand) #fulfilled demand is overall demand subtracted by lost_demand
 
-    def find_fulfilled_arrivals(arrivals):
-        #find fulfileld arrivals based on overall arrivals and user cost model
+    def find_fulfilled_arrivals(self, arrivals, lost_demand):
+        #find fulfilled arrivals based on overall arrivals, minus the lost demand
+        return arrivals
 
 
     def zone_division(self):
@@ -160,10 +179,10 @@ class BikeShareEnv(gym.Env):
         #calculate bounds for the station coordinates to create a polygon containing all stations
         #split polygon into even square grid of zone_size x zone_size, geometry data stored in geopandas dataframe
         bounds = gdf.total_bounds
-        x_coords = np.arange(bounds[0] + distance/2, bounds[2], self.zone_size)
-        y_coords = np.arange(bounds[1] + distance/2, bounds[3], self.zone_size)
+        x_coords = np.arange(bounds[0] + self.zone_size/2, bounds[2], self.zone_size)
+        y_coords = np.arange(bounds[1] + self.zone_size/2, bounds[3], self.zone_size)
         combinations = np.array(list(product(x_coords, y_coords)))
-        squares = gpd.points_from_xy(combinations[:, 0], combinations[:, 1]).buffer(distance / 2, cap_style=3)
+        squares = gpd.points_from_xy(combinations[:, 0], combinations[:, 1]).buffer(self.zone_size / 2, cap_style=3)
 
         
         zones = gpd.GeoDataFrame(geometry=gpd.GeoSeries(squares), crs="EPSG:3857") #df containing coordinates for each zone
@@ -201,7 +220,7 @@ class BikeShareEnv(gym.Env):
         #calculate max capacity for each zone
         for key, val in station.items():
             if key in self.station_zones:
-                zone = station_zones[key]
+                zone = self.station_zones[key]
             max_capacity[self.zone_dict[zone]] += val 
         return max_capacity
 
@@ -212,33 +231,38 @@ class BikeShareEnv(gym.Env):
         return rand_supply
 
     def process_bike_share(self):
-        df = self.ride_data
+        dat = self.ride_data
         
         #convert dataframe to datetime objects
-        df['Start Time'] = pd.to_datetime(df['Start Time'], format='%m/%d/%Y %H:%M')
-        df['End Time'] = pd.to_datetime(df['End Time'], format='%m/%d/%Y %H:%M')
+        dat['Start Time'] = pd.to_datetime(dat['Start Time'], format='%m/%d/%Y %H:%M')
+        dat['End Time'] = pd.to_datetime(dat['End Time'], format='%m/%d/%Y %H:%M')
 
         #create start and end time for each timestep
         t_start = self.curr_step
-        t_end = self.curr_step + self.time_step - 1
-        t_s_str = str(datetime.timedelta(minutes=t_start))
-        t_e_str = str(datetime.timedelta(minutes=t_end))
-        start_step = '2022-09-{day} {time}'.format(day=self.start_day, time=t_s_str)
-        end_step = '2022-09-{day} {time}'.format(day=self.start_day, time=t_s_str)
-
+        #t_end = self.curr_step + self.time_step
+        start_step = pd.Timestamp(datetime.datetime(2022, 9, self.start_day, hour=t_start))
+        end_step = pd.Timestamp(datetime.datetime(2022, 9, self.start_day, hour=t_start, minute=59))
         #mask for start time
-        mask = (df['Start Time'] >= start_step) & (df['Start Time'] <= end_step)
+        mask = (dat['Start Time'] >= start_step) & (dat['Start Time'] <= end_step)
         
         #add demand and arrivals to each zone for the chosen timestep
         demand_vec = np.zeros(self.num_zones)
         arrival_vec = np.zeros(self.num_zones)
-        for start_st, end_st in zip(df['Start Station Id'].loc[mask], df['End Station Id'].loc[mask]):
+        start_end = {}
+        for start_st, end_st in zip(dat['Start Station Id'].loc[mask], dat['End Station Id'].loc[mask]):
             if start_st in self.station_zones:
                 start_zone = self.station_zones[start_st]
+                demand_vec[self.zone_dict[start_zone]] +=1
             if end_st in self.station_zones:
                 end_zone = self.station_zones[end_st]
-            demand_vec[self.zone_dict[start_zone]] +=1
-            arrival_vec[self.zone_dict[end_zone]] +=1
+                arrival_vec[self.zone_dict[end_zone]] +=1
+            # if start_st not in start_end:
+            #     if end_st not in start_end[start_st]:
+            #         start_end[start_st].update({end_st: 1})
+            #     else:
+            #         start_end[start_st][end_st] += 1
+            # else:
+            #     start_end[start_st] = {end_st: 1}   
         
         return demand_vec, arrival_vec
 
@@ -255,3 +279,17 @@ class BikeShareEnv(gym.Env):
             zone_dist[a] = temp_dist
             temp_dist = {}
         return zone_dist
+
+if __name__ == "__main__":
+    data = pd.read_csv('./2022-09.csv')
+    env = BikeShareEnv(data, 300)
+    model = A2C("MultiInputPolicy", env, verbose=1)
+    model.learn(total_timesteps=5000)
+
+    vec_env = model.get_env()
+    obs = vec_env.reset()
+    for i in range(100):
+        action, _state = model.predict(obs, deterministic=True)
+        obs, reward, done, info = vec_env.step(action)
+        print(reward)
+    print(env.return_history())
