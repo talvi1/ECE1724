@@ -11,6 +11,7 @@ import folium
 import pygeos
 import random
 import math
+import datetime
 
 
 def zone_division(distance):
@@ -57,33 +58,82 @@ def zone_division(distance):
     return station_zones, zone_dict, zones
 
 def process_bike_share():
-    df = pd.read_csv('./2022-09.csv')
-    print(len(df))
+    dat = pd.read_csv('./2022-09.csv')
+
     
-    rand_day = random.randrange(1, 30)
-    df['Start Time'] = pd.to_datetime(df['Start Time'], format='%m/%d/%Y %H:%M')
-    df['End Time'] = pd.to_datetime(df['End Time'], format='%m/%d/%Y %H:%M')
-    #print(df.loc[pd.to_datetime(df['Start Time'] == '2022.09.01')])
-    mask = (df['Start Time'] >= '2022-09-01 08:00:00') & (df['Start Time'] <= '2022-09-01 08:59:00')
-    station_zones, zone_dict, y = zone_division(300)
+    dat['Start Time'] = pd.to_datetime(dat['Start Time'], format='%m/%d/%Y %H:%M')
+    dat['End Time'] = pd.to_datetime(dat['End Time'], format='%m/%d/%Y %H:%M')
+    station_zones, zone_dict, zones = zone_division(300)
+    zone_dict_rev = {y: x for x, y in zone_dict.items()}
+    #create start and end time for each timestep
+    t_start = 17
+    #t_end = self.curr_step + self.time_step
+    start_step = pd.Timestamp(datetime.datetime(2022, 9, 1, hour=t_start))
+    end_step = pd.Timestamp(datetime.datetime(2022, 9, 1, hour=t_start, minute=59))
+    #mask for start time
+    mask = (dat['Start Time'] >= start_step) & (dat['Start Time'] <= end_step)
+    
+    #add demand and arrivals to each zone for the chosen timestep
     demand_vec = np.zeros(len(zone_dict))
     arrival_vec = np.zeros(len(zone_dict))
-    start_end = {}
-    for start_st, end_st in zip(df['Start Station Id'].loc[mask], df['End Station Id'].loc[mask]):
+    trips = {}
+    
+    for start_st, end_st in zip(dat['Start Station Id'].loc[mask], dat['End Station Id'].loc[mask]):
         if start_st in station_zones and end_st in station_zones:
             start_zone = station_zones[start_st]
-            demand_vec[zone_dict[start_zone]] +=1
             end_zone = station_zones[end_st]
-            arrival_vec[zone_dict[end_zone]] +=1
-            if start_zone in start_end:
-                if end_zone not in start_end[start_zone]:
-                    start_end[start_zone].update({end_zone: 1})
+            start_ind = zone_dict[start_zone]
+            end_ind = zone_dict[end_zone]
+            if start_ind in trips:
+                if end_ind in trips[start_ind]:
+                    trips[start_ind][end_ind] += 1
                 else:
-                    start_end[start_zone][end_zone] += 1
+                    trips[start_ind].update({end_ind: 1})
             else:
-                start_end[start_zone] = {end_zone: 1} 
-    print(start_end)
-       
+                trips[start_ind] = {end_ind: 1}
+
+    arrivals_before = np.zeros(len(zone_dict))
+
+    fulfilled_demand = np.zeros(len(zone_dict))
+    for x in range(len(zone_dict)):
+        if x in trips:
+            fulfilled_demand[x] = 1
+    print(fulfilled_demand)
+    for x, y in trips.items():
+        for a, b in trips[x].items():
+            arrivals_before[a] += b
+    for x in range(len(zone_dict)):
+        if fulfilled_demand[x] > 0 and x in trips:
+            z = fulfilled_demand[x]
+            while z > 0 and sum(trips[x].values()) > 0:
+                for key in trips[x]:
+                    trips[x][key] -=1
+                    z -=1
+                    if z == 0:
+                        break        
+                
+                
+    
+    arrivals = np.zeros(len(zone_dict))
+    for x, y in trips.items():
+        for a, b in trips[x].items():
+            arrivals[a] += b
+    print(fulfilled_demand.sum())
+    print(arrivals_before.sum())
+    print(arrivals.sum())
+
+                
+
+
+        # if start_st not in start_end:
+        #     if end_st not in start_end[start_st]:
+        #         start_end[start_st].update({end_st: 1})
+        #     else:
+        #         start_end[start_st][end_st] += 1
+        # else:
+        #     start_end[start_st] = {end_st: 1}   
+    #print(trips)
+
     return demand_vec, arrival_vec
 
 def max_zone_capacity():
@@ -123,7 +173,7 @@ def find_zone_distance():
         for c, d in zone_dict.items():
             c_point = zone_df['geometry'].loc[c].centroid
             dist = a_point.distance(c_point)
-            if dist < 1500 and a != c:
+            if dist < 2000 and a != c:
                 temp_dist[c] = int(dist)
         zone_dist[a] = temp_dist
         temp_dist = {}
@@ -134,14 +184,16 @@ def fulfilled_demand():
     supply = initialize_random_supply()
     demand, arrival = process_bike_share()
     station_zones, zone_dict, zones = zone_division(300)
-    action_price = np.zeros(len(max_capacity))
+    action = np.zeros(len(max_capacity))
+    shifted_demand = np.zeros(len(max_capacity))
     for x in range(len(max_capacity)):
-        action_price[x] = round(random.uniform(0.0, 4.0), 2)
+        action[x] = round(random.uniform(0, 5.0), 2)
     extra_demand = np.subtract(supply, demand)
     lost_demand = np.zeros(len(max_capacity))
     zone_dict_rev = {y: x for x, y in zone_dict.items()}
     zone_dist = find_zone_distance()
-    print(extra_demand)
+    curr_budget = 500
+    copy_demand = demand
     for x in range(len(extra_demand)):
         if extra_demand[x] < 0:
             zon = zone_dict_rev[x]
@@ -149,36 +201,60 @@ def fulfilled_demand():
             if len(nearest_zones) == 0: #no nearby zones 
                 lost_demand[x] = abs(extra_demand[x])
             else: 
-                filled = False
                 visited = []
-                while not filled: 
+                extra = abs(extra_demand[x])
+                print('Index is:', x)
+                print('Extra: ', extra)
+                while extra > 0 and len(nearest_zones) > 0: 
                     nearest = min(nearest_zones, key=nearest_zones.get)
-                    if extra_demand[zone_dict[nearest]] <= 0:
-                        nearest_zones.pop(nearest)
-                        if len(nearest_zones) == 0:
-                            lost_demand[x] = abs(extra_demand[x])
-                            break
-                    elif extra_demand[zone_dict[nearest]] >= abs(extra_demand[x]):
-                        filled = True 
-                        visited.append([nearest_zones[nearest], abs(extra_demand[x])])
+                    avail = extra_demand[zone_dict[nearest]]
+                    if avail >= extra:
+                        used = extra
+                        extra = 0
+                    elif avail >= 0 and avail < extra:
+                        used = avail 
+                        extra = extra - avail
                     else: 
-                        a = extra_demand[zone_dict[nearest]]
-                        extra_demand[x] += a
-                        visited.append([nearest_zones[nearest], a])
-                        nearest_zones.pop(nearest)
-                if filled:
-                    for y in range(len(visited)):
-                        if user_reject(visited[y][0], action_price[x]):
-                            lost_demand[x] += visited[y][1] 
+                        used = 0
+                    visited.append([nearest, nearest_zones[nearest], used])
+                    nearest_zones.pop(nearest)
+                print(visited)
+                for y in range(len(visited)):
+                    dist = visited[y][1]
+                    user_reject = (2.2685090*math.pow(10, -6)*(dist**2) - 0.000645645*dist + 0.84182) < (action[x]) 
+                    #bool value to check if user cost for the walking distance to the nearest zone is greater than the offered price
+                    # if so, user rejects the offered price, since it offers negative utility. If user rejects, demand is lost.  
+                    if user_reject or curr_budget <= 0:
+                        lost_demand[x] += visited[y][2]
+                       # demand[zone_dict[visited[y][0]]] -= abs(extra_demand[x])
+                    else:
+                        curr_budget = curr_budget - (5 - (action[x]))
+                        shifted_demand[zone_dict[visited[y][0]]] += visited[y][2]
+                       # demand[zone_dict[visited[y][0]]] += visited[y][2]
+                print('Lost: ', lost_demand[x])
+                print('Budget:', curr_budget)
+    z = np.zeros(len(extra_demand))
+    for x in range(len(extra_demand)):
+        if extra_demand[x] < 0:
+            z[x] = abs(extra_demand[x])
+           # demand[x] = demand[x] - abs(extra_demand[x])
+
+    print(demand.sum())
+    print(lost_demand)
+    fulfilled = np.add(demand, shifted_demand)
+    print(fulfilled)
+    print(fulfilled.sum())
+    print(z.sum())
     print(lost_demand.sum())
-    print(np.subtract(demand, lost_demand).sum())
+    print((z.sum()-lost_demand.sum())/z.sum())
+    print(curr_budget/500)
+    print(supply)
+    print(np.subtract(supply, fulfilled))
+    return np.subtract(demand, lost_demand) 
 
 def find_fulfilled_arrivals(self, demand, arrivals, lost_demand):
         #find fulfilled arrivals based on overall arrivals, minus the lost demand
-    for x in range(self.num_zones):
-        
-
-    return np.zeros(self.num_zones
+    return np.zeros(self.num_zones)
 
 def user_reject(distance, price):
     max_distance = 2000
