@@ -92,16 +92,6 @@ def process_bike_share():
             else:
                 trips[start_ind] = {end_ind: 1}
 
-    arrivals_before = np.zeros(len(zone_dict))
-
-    fulfilled_demand = np.zeros(len(zone_dict))
-    for x in range(len(zone_dict)):
-        if x in trips:
-            fulfilled_demand[x] = 1
-    print(fulfilled_demand)
-    for x, y in trips.items():
-        for a, b in trips[x].items():
-            arrivals_before[a] += b
     for x in range(len(zone_dict)):
         if fulfilled_demand[x] > 0 and x in trips:
             z = fulfilled_demand[x]
@@ -111,17 +101,11 @@ def process_bike_share():
                     z -=1
                     if z == 0:
                         break        
-                
-                
     
     arrivals = np.zeros(len(zone_dict))
     for x, y in trips.items():
         for a, b in trips[x].items():
             arrivals[a] += b
-    print(fulfilled_demand.sum())
-    print(arrivals_before.sum())
-    print(arrivals.sum())
-
                 
 
 

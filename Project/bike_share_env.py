@@ -29,7 +29,7 @@ class BikeShareEnv(gym.Env):
         self.num_zones = len(self.zone_dict) # number of zones in the environment 
         self.max_capacity = self.max_zone_capacity() #maximum capacity in each zone, numpy vector 
         self.zone_dist = self.find_zone_distance()
-        self.max_budget = 2000.0
+        self.max_budget = 3000.0
 
         #spaces
         self.action_space = spaces.Box(low=-2.5, high=2.5, shape=(self.num_zones,), dtype=np.float32)
@@ -83,7 +83,7 @@ class BikeShareEnv(gym.Env):
 
         if self.curr_step == self.max_length:
             self.curr_step = random.randrange(6, 20)
-        if self.total_step == 50:
+        if self.total_step == 24:
             self.reset()
             self.done = True
         res = sum(self.reward_history[-10:])
@@ -411,9 +411,9 @@ if __name__ == "__main__":
     np.set_printoptions(suppress=True)
     np.set_printoptions(precision=2)
     n_actions = env.action_space.shape[-1]
-    action_noise = OrnsteinUhlenbeckActionNoise(mean=np.zeros(n_actions), sigma=0.1 * np.ones(n_actions))
+    action_noise = OrnsteinUhlenbeckActionNoise(mean=np.zeros(n_actions), sigma=1 * np.ones(n_actions))
     # Because we use parameter noise, we should use a MlpPolicy with layer normalization
-    model = A2C("MultiInputPolicy", env, learning_rate=0.0007, entroy_coef=0.5, rms_prop_eps=0.00001, tensorboard_log=tmp_path, verbose=1) #learning_rate=0.0003, action_noise=action_noise, gamma=0.49
+    model = SAC("MultiInputPolicy", env, learning_rate=0.0007, gamma=0.99, action_noise=action_noise,  batch_size=24, learning_starts=48,  tensorboard_log=tmp_path, verbose=1) #learning_rate=0.0003, action_noise=action_noise, gamma=0.49
 
     model.set_logger(new_logger)
     model.learn(total_timesteps=100000, log_interval=1, progress_bar=True, tb_log_name='log1')
