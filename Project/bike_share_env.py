@@ -15,6 +15,7 @@ from stable_baselines3 import TD3, PPO, A2C, SAC, DDPG
 from stable_baselines3.common.logger import configure
 from stable_baselines3.common.noise import NormalActionNoise, OrnsteinUhlenbeckActionNoise
 from copy import deepcopy
+import csv
 
 class BikeShareEnv(gym.Env):
     #time_step: timestep in minutes 
@@ -121,7 +122,10 @@ class BikeShareEnv(gym.Env):
         self.curr_step += self.time_step
 
 
-        info = {}
+        info = {'budget': self.curr_budget,
+                'supply': updated_supply.sum(),
+                'demand': demand.sum(), 
+                'fulfilled': fulfilled_demand.sum()}
         self.history.append(self.reward)
         return obs, self.reward, self.done, info
     
@@ -413,17 +417,29 @@ if __name__ == "__main__":
     n_actions = env.action_space.shape[-1]
     action_noise = OrnsteinUhlenbeckActionNoise(mean=np.zeros(n_actions), sigma=1 * np.ones(n_actions))
     # Because we use parameter noise, we should use a MlpPolicy with layer normalization
-    model = SAC("MultiInputPolicy", env, learning_rate=0.0007, gamma=0.99, action_noise=action_noise,  batch_size=24, learning_starts=48,  tensorboard_log=tmp_path, verbose=1) #learning_rate=0.0003, action_noise=action_noise, gamma=0.49
+    model = A2C("MultiInputPolicy", env, learning_rate=0.0007, tensorboard_log=tmp_path, verbose=1) #learning_rate=0.0003, action_noise=action_noise, gamma=0.49
 
     model.set_logger(new_logger)
-    model.learn(total_timesteps=100000, log_interval=1, progress_bar=True, tb_log_name='log1')
-
+    model.learn(total_timesteps=2000, log_interval=1, progress_bar=True)
+    model.save('a2c_model')
     vec_env = model.get_env()
     obs = vec_env.reset()
     
-    for i in range(10):
+    results = {'reward': [],
+                'budget': [],
+                'supply': [],
+                'demand': [], 
+                'fulfilled': []
+                }
+    for i in range(2):
         action, _state = model.predict(obs, deterministic=True)
         obs, reward, done, info = vec_env.step(action)
-        print(action)
-        print(reward)
-    
+        print(info)
+        results['reward'].append(reward[0])
+        results['budget'].append(info[0]['budget'])
+        results['supply'].append(info[0]['supply'])
+        results['demand'].append(info[0]['demand'])
+        results['fulfilled'].append(info[0]['fulfilled'])
+
+df = pd.DataFrame(results)
+df.to_csv('results_a2c', encoding='utf-8', index=False)
